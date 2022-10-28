@@ -1,0 +1,1021 @@
+PROJECT ON NETWORK DATA ANALYSIS
+
+Submitted to: Prof. Dr. Lauria Mario
+Submitted by: Surya Hembrom
+Matriculation Number: 229578
+Date: 24.7.2022 
+
+
+```{r}
+
+if (!requireNamespace("BiocManager", quietly = TRUE)){
+  install.packages("BiocManager")
+}
+
+BiocManager::install("recount3")
+#BiocManager::install("DESeq2")
+
+```
+Study: Transcriptome analysis of psoriasis in a large case-control sample: RNA-seq provides insights into disease mechanisms
+GEO accession: GSE54456
+SRA on recout3: SRP035988
+```{r}
+library("recount3")
+rse_gene_SRP035988_manual <- create_rse_manual(
+  "SRP035988",
+  recount3_url = "https://idies.jhu.edu/recount3/data",
+  "data_sources/sra",
+  organism = "human")
+
+# to get the raw counts 
+SRP035988_rawcounts <- rse_gene_SRP035988_manual@assays@data[[1]]
+
+# to get the info about the metadata download link
+write.csv(rse_gene_SRP035988_manual@metadata, "SRP035988_downloadlink.csv")
+# to get the number of genes being studied 
+rse_gene_SRP035988_manual@elementMetadata@nrows[1]
+
+```
+metadata fetching 
+```{r}
+SRP035988_meta <- read_metadata(
+    metadata_files = file_retrieve(
+        locate_url("SRP035988", "data_sources/sra", organism = "human",
+        recount3_url="https://idies.jhu.edu/recount3/data"
+    ))
+)
+
+# number of samples and experiments attributes
+dim(SRP035988_meta)
+
+# the experiment attributes
+colnames(SRP035988_meta)
+
+# to get the samples metadata 
+write.csv(rse_gene_SRP035988_manual@colData, "SRP035988_SamplesData.csv")
+colData <-  as.data.frame(rse_gene_SRP035988_manual@colData)
+
+# check if the reads are paired end
+is_paired_end(rse_gene_SRP035988_manual, avg_mapped_read_length = "recount_qc.star.average_mapped_length",
+  avg_read_length = "recount_seq_qc.avg_len")
+which(is_paired_end(SRP035988_meta)=="TRUE")
+# are single end reads
+
+```
+The reads are single-end reads in this dataset. 
+
+Read the counts 
+```{r}
+SRP035988_readcounts <- compute_read_counts(
+rse_gene_SRP035988_manual,
+round = TRUE,
+avg_mapped_read_length = "recount_qc.star.average_mapped_length"
+)
+
+```
+
+```{r}
+library(ggplot2)
+# dimension of the genes and number of samples in the read counts
+dim(SRP035988_readcounts)
+
+SRP035988.readcounts.avg.mrl <-as.data.frame(colSums(compute_read_counts(rse_gene_SRP035988_manual, avg_mapped_read_length = "recount_qc.star.average_mapped_length"))/1e6)
+# read counts per million reads
+SRP035988.readcounts <-as.data.frame(colSums(compute_read_counts(rse_gene_SRP035988_manual))/1e6)
+colnames(SRP035988.readcounts)[1] <- c("Total_Reads_in_millions")
+
+tiff("Reads_in_millions.tiff", res= 800, units="in", height= 8, width = 20)
+ggplot(SRP035988.readcounts, aes(y= Total_Reads_in_millions,x= rownames(SRP035988.readcounts))) + geom_point() +
+  theme(axis.text.x =  element_text(angle = 90, size= 6)) + labs(y = "Total Reads (in millions)", x = "SAMPLES")
+dev.off()
+
+# compare the two dataframes
+library(arsenal)
+comparedf(SRP035988.readcounts,SRP035988.readcounts.avg.mrl)
+```
+```{r}
+# read counts
+write.csv(SRP035988.readcounts, "SRP035988_readcounts.csv")
+
+RAW.COUNTS <- as.data.frame(assays(rse_gene_SRP035988_manual)$raw_counts)
+write.csv(RAW.COUNTS, "RAW_COUNTS.csv")
+
+COUNTS <- as.data.frame(assays(rse_gene_SRP035988_manual)$counts)
+write.csv(COUNTS, "COUNTS.csv")
+
+comparedf(RAW.COUNTS, COUNTS)
+```
+by 1. auc:compute the scaling factor by the total coverage of the sample. That is, the area under the curve (AUC) of
+the coverage. 
+  2. mapped_reads: scale the counts by the number of mapped reads (in the QC annotation), whether the library was paired-end or not, and the desired read length (L).
+
+```{r}
+# scale the counts based on AUC: SRP035988.readcounts.tr same as TRANSFORM.COUNTS
+SRP035988.readcounts.tr <- transform_counts(rse_gene_SRP035988_manual)
+write.csv(SRP035988.readcounts.tr, "SRP035988_readcounts_transform.csv")
+
+# coverage of each gene across samples 
+coverage_count <- as.data.frame(assay(rse_gene_SRP035988_manual))
+write.csv(coverage_count, "coverage_count.csv")
+```
+
+```{r}
+## Scale and transform the counts based on the AUC
+assays(rse_gene_SRP035988_manual)$counts <- transform_counts(rse_gene_SRP035988_manual, by= c("auc"))
+TRANSFORM.COUNTS <- as.data.frame(assays(rse_gene_SRP035988_manual)$counts)
+write.csv(TRANSFORM.COUNTS, "TRANSFORM_COUNTS.csv")
+
+# compare the transformed counts and initial counts 
+comparedf(TRANSFORM.COUNTS, COUNTS)
+```
+
+```{r}
+# SCALED/TRANSFORMED READ COUNTS NORMALISATION (Between SAMPLES)
+# to get the read counts normalized : as different samples have different read coverage depth for a a given gene.
+# gives the reads counts per sample for all the genes
+# based on avg_mapped_read_length
+## Compute RPKMs
+assays(rse_gene_SRP035988_manual)$RPKM <- recount::getRPKM(rse_gene_SRP035988_manual)
+RPKM <- as.data.frame(colSums(assay(rse_gene_SRP035988_manual, "RPKM")))
+write.csv(RPKM, "RPKM.csv")
+```
+
+```{r}
+## Compute TPMs
+assays(rse_gene_SRP035988_manual)$TPM <- recount::getTPM(rse_gene_SRP035988_manual)
+TPM <- as.data.frame(colSums(assay(rse_gene_SRP035988_manual, "TPM")) / 1e6) ## Should all be equal to 1
+write.csv(TPM, "TPM.csv")
+```
+
+
+```{r}
+library(ggplot2)
+
+#Visualize the RPKM 
+colnames(RPKM)[1] <- "Rpkm"
+
+# plot the RPKM of each sample
+tiff("RPKM_beforeNormalisation.tiff", units="in", width=20, height = 8.5, res=800)
+ggplot(RPKM, aes(x=rownames(RPKM), y=Rpkm)) +
+   geom_boxplot(fill=c('steelblue')) +
+   theme(axis.text.x = element_text(angle = 90, size = 7)) + labs(x="SAMPLES")
+dev.off()
+```
+```{r}
+# NORMALISATION BETWEEN SAMPLES
+# edgeR
+
+library(edgeR)
+
+dim(TRANSFORM.COUNTS)
+# create a DGEList to combine counts and gene names
+
+disease.condition <- colData$sra.sample_attributes
+table(disease.condition)
+
+combined.data <- DGEList(counts=TRANSFORM.COUNTS, genes =rownames(TRANSFORM.COUNTS), group = disease.condition)
+```
+```{r}
+# filtering based on genes that are expressed in adequate number of samples
+
+isexpr <- filterByExpr(combined.data, group=disease.condition)
+table(isexpr)
+```
+
+
+```{r}
+# keep only the genes with defined annotation and recompute the library sizes
+annot.yes <- rowSums(is.na(combined.data$genes)) ==0
+
+filtered.combined.data <- combined.data[isexpr & annot.yes, , keep.lib.sizes = FALSE]
+dim(filtered.combined.data) # retained 24553 genes in 178 samples
+```
+
+```{r}
+# library sizes (number of transcript counts per sample)
+tiff("Filteredlibrarysize.tiff", units="in", width=20, height = 8.5, res=800)
+barplot(filtered.combined.data$samples$lib.size*1e-6, names= rownames(filtered.combined.data$samples), ylab = "Library size (millions)", las=2, cex.names = 0.75)
+dev.off()
+```
+```{r}
+# normalization of the filtered genes of all the samples
+filtered.norm.combined.data <- calcNormFactors(filtered.combined.data)
+# calculating the counts per million per sample for all the genes
+counts_GeTMM <- as.data.frame(cpm(filtered.norm.combined.data))
+write.csv(counts_GeTMM, "counts_GeTMM.csv")
+tiff("Filterednormalised.tiff", units="in", width=20, height = 8.5, res=800)
+boxplot(counts_GeTMM, las =2, cex.axis=0.75, ylim=c(0,4000), ylab= "CPM")
+dev.off()
+```
+
+
+```{r}
+# normalization of the filtered genes of the samples in log 
+
+log_counts_GeTMM <- log2(counts_GeTMM +1)
+write.csv(log_counts_GeTMM, "log_counts_GeTMM.csv")
+tiff("Filterednormalisedlog.tiff", units="in", width=20, height = 8.5, res=800)
+boxplot(log_counts_GeTMM, las =2, cex.axis=0.75, ylab = "CPM (log2)")
+dev.off()
+
+# to check the sample names are arranged according to the metadata 
+all(colnames(counts_GeTMM) %in% (SRP035988_meta$external_id))
+```
+```{r}
+# to understand the dispersion values and
+# apply the Gene-wise negative binomial generalized Linear Models with Quasi-likelihood tests
+library(statmod)
+design <- model.matrix(~ disease.condition)
+
+filtered.norm.combined.data.dispersion <- estimateDisp(filtered.norm.combined.data, design, robust = TRUE)
+tiff("filtered_norm_combined_datadispersion.tiff", res=800, units = "in", width=8, height =8.5)
+plotBCV(filtered.norm.combined.data.dispersion)
+dev.off()
+
+# gene expression analysis
+fit <- glmQLFit(filtered.norm.combined.data.dispersion, design, robust=TRUE)
+tiff("fit1.tiff", res=800, units = "in", width=8, height =8.5)
+plotQLDisp(fit)
+dev.off()
+
+```
+
+```{r}
+# the differentially expressed genes test
+de.genes <-  glmQLFTest(fit)
+# top down-regulated and up-regulated expressed genes in psoriasis sorted by log-fold change and p value cutoff 0.001
+topTags(de.genes, sort.by = "logFC", p.value = 0.001)
+summary(decideTests(de.genes))
+
+#table of down-regulated -1, up-regulated 1 and insignificant genes 0
+x <- as.data.frame(decideTests(de.genes))
+write.csv(x, "DEgenes.csv")
+# insignificant genes list
+insignificant.genes <- rownames(x)[which(x$`disease.conditionsource_name;;Psoriasis_skin|tissue type;;lesional psoriatic skin` ==0)]
+
+# down-regulated genes list 
+downregulated.genes <- rownames(x)[which(x$`disease.conditionsource_name;;Psoriasis_skin|tissue type;;lesional psoriatic skin` == -1)]
+
+# up-regulated genes list
+upregulated.genes <- rownames(x)[which(x$`disease.conditionsource_name;;Psoriasis_skin|tissue type;;lesional psoriatic skin` == 1)]
+
+```
+```{r}
+library(dplyr)
+# for filtering out the non significant genes 
+mylist <- list(insignificant.genes)
+mylist <- unlist(mylist)
+
+# for filtering out the down-regulated genes 
+downreg.list <- list(downregulated.genes)
+downreg.list <- unlist(downreg.list)
+
+# for filtering out the up-regulated genes
+upreg.list <- list(upregulated.genes)
+upreg.list <- unlist(upregulated.genes)
+
+# transpose the normalised counts
+transpose.counts_GeTMM <- as.data.frame(t(counts_GeTMM))
+
+# step 1.filter out the insignificant genes from the normalized transposed counts
+transpose.counts_GeTMM.filtered <- transpose.counts_GeTMM[, !(names(transpose.counts_GeTMM) %in% mylist)]
+
+# step 1.A. filter out the down-regulated genes from the normalized transposed counts
+transpose.counts_GeTMM.up.filtered <- transpose.counts_GeTMM.filtered[, !(names(transpose.counts_GeTMM.filtered) %in% downreg.list)]
+
+# step 1.B. filter out the up-regulated genes from the normalized transposed counts 
+transpose.counts_GeTMM.down.filtered <- transpose.counts_GeTMM.filtered[, !(names(transpose.counts_GeTMM.filtered) %in% upreg.list)]
+
+```
+
+```{r}
+# PCA analysis 
+library(plotly)
+library(ggfortify)
+
+# pca for upregulated and downregulated genes
+pca <- prcomp(transpose.counts_GeTMM.filtered, scale. = TRUE)
+summary(pca)
+screeplot(pca)
+
+# pca for upregulated genes only
+pca.up <- prcomp(transpose.counts_GeTMM.up.filtered, scale. =TRUE)
+summary(pca.up)
+screeplot(pca.up)
+
+# pca for downregulated genes only 
+pca.down <- prcomp(transpose.counts_GeTMM.down.filtered, scale. = TRUE)
+summary(pca.down)
+screeplot(pca.down)
+
+# divide the samples as per control and case
+skintype = c(1:length(colData$sra.sample_attributes))
+
+for (i in 1:length(colData$sra.sample_attributes))
+{  
+  if (colData$sra.sample_attributes[i] == "source_name;;Psoriasis_skin|tissue type;;lesional psoriatic skin")
+  print(skintype[i] <-  'lesional psoriatic skin')
+  else
+  print(skintype[i]  <- 'normal skin')
+}
+
+# bind the data frames 
+transpose.counts_GeTMM.filtered.skintype <- cbind(transpose.counts_GeTMM.filtered, as.data.frame(skintype))
+write.csv(transpose.counts_GeTMM.filtered.skintype, "transposecountsGeTMMfilteredskintype.csv")
+
+# bind the data frames of the up-regulated genes
+transpose.counts_GeTMM.up.filtered.skintype<- cbind(transpose.counts_GeTMM.up.filtered, as.data.frame(skintype))
+write.csv(transpose.counts_GeTMM.up.filtered.skintype, "transposecountsGeTMMupfilteredskintype.csv")
+
+# bind the data frames of the down-regulated genes 
+transpose.counts_GeTMM.down.filtered.skintype <- cbind(transpose.counts_GeTMM.down.filtered, as.data.frame(skintype))
+write.csv(transpose.counts_GeTMM.down.filtered.skintype, "transposecountsGeTMMdownfilteredskintype.csv")
+
+# plot the PCA of up-regulated and down-regulated genes
+myplot.pca <- autoplot(pca, data = transpose.counts_GeTMM.filtered.skintype, colour = 'skintype') + labs(title = "Upregulated and Downregulated genes")
+ggplotly(myplot.pca)
+
+
+# plot the PCA of only up-regulated genes
+myplot.pca.up <- autoplot(pca.up, data= transpose.counts_GeTMM.up.filtered.skintype, colour = 'skintype') + labs(title = "Upregulated genes")
+ggplotly(myplot.pca.up)
+
+# plot the PCA of only down-regulated genes 
+myplot.pca.down <- autoplot(pca.down, data= transpose.counts_GeTMM.down.filtered.skintype, colour = 'skintype') +
+  labs(title = "Downregulated genes")
+ggplotly(myplot.pca.down)
+
+```
+K means clustering 
+Unsupervised machine learning techniques do not need to split data into training data and test data
+The best number of clusters are 9 from wss and gap statistic methods
+```{r}
+#adapted from: https://www.statology.org/k-means-clustering-in-r/#:~:text=K-means%20clustering%20is%20a%20technique%20in%20which%20we,different%20clusters%20are%20quite%20different%20from%20each%20other.
+# Kmeans clustering
+library(cluster)
+library(factoextra)
+set.seed(10)
+# scale the data as the k-means does not do automatic scaling
+scaled.transpose.counts_GeTMM.filtered <- as.data.frame(scale(transpose.counts_GeTMM.filtered))
+
+
+renamed.transpose.counts_GeTMM.filtered <- transpose.counts_GeTMM.filtered.skintype
+
+for (i in 1:length(renamed.transpose.counts_GeTMM.filtered$skintype)){
+  if (renamed.transpose.counts_GeTMM.filtered$skintype[i] == "lesional psoriatic skin")
+    rownames(renamed.transpose.counts_GeTMM.filtered)[i] <- paste0(rownames(renamed.transpose.counts_GeTMM.filtered)[i], "p")
+  if (renamed.transpose.counts_GeTMM.filtered$skintype[i] != "lesional psoriatic skin")
+     rownames(renamed.transpose.counts_GeTMM.filtered)[i] <- paste0(rownames(renamed.transpose.counts_GeTMM.filtered)[i], "n")
+}
+
+# remove the skintype column
+renamed.transpose.counts_GeTMM.filtered <- renamed.transpose.counts_GeTMM.filtered %>% select(-skintype)
+# scale the renamed dataframe
+scaled.renamed.transpose.counts_GeTMM.filtered <- as.data.frame(scale(renamed.transpose.counts_GeTMM.filtered))
+
+# number of clusters versus the total within sum of squares
+tiff("nbclust_kmeans.tiff", units="in", width=5, height = 5, res=800)
+fviz_nbclust(scaled.renamed.transpose.counts_GeTMM.filtered, kmeans, method = "wss", k.max = 20)
+dev.off()
+
+# number of clusters versus gap statistic in kmeans clustering:
+gap.stat <- clusGap(scaled.renamed.transpose.counts_GeTMM.filtered, FUN = kmeans, nstart =20, K.max=20, B=30)
+# plot number of clusters vs. gap statistic
+tiff("gapstat_kmeans.tiff", units="in", width=5, height = 5, res=800)
+fviz_gap_stat(gap.stat)
+dev.off()
+# setting the clusters as 9 based on WSS elbow method and random sets 50
+km.out <- kmeans(scaled.renamed.transpose.counts_GeTMM.filtered, 9, nstart=50)
+km.out$tot.withinss
+
+# plot the kmeans model 
+tiff("bestmodel_kmeans.tiff", units="in", width=20, height = 8.5, res=800)
+fviz_cluster(km.out, data=scaled.renamed.transpose.counts_GeTMM.filtered, repel = TRUE) 
+dev.off()
+#aggregate(scaled.renamed.transpose.counts_GeTMM.filtered, by=list(km.out$cluster), mean)
+
+```
+Hierarchical clustering
+```{r}
+#adapted from: https://www.statology.org/hierarchical-clustering-in-r/
+#https://www.datacamp.com/tutorial/hierarchical-clustering-R
+
+library(dendextend)
+
+set.seed(10)
+method.clust <- c("average", "single", "complete", "ward")
+names(method.clust) <- c("average", "single", "complete", "ward")
+
+# as hierarchical clustering is one of the clustering algorithm: it needs scaling
+agglom.coeff <- function(y) {
+  agnes(scaled.renamed.transpose.counts_GeTMM.filtered, method = y)$ac
+}
+# calc the agglomerative coefficient for each clustering linkage method 
+sapply(method.clust, agglom.coeff)
+
+# calculate the gap statistic to obtain the optimal number of clusters 
+gap.stat.hc <- clusGap(scaled.renamed.transpose.counts_GeTMM.filtered, FUN= hcut, nstart =15, K.max=10, B=20) 
+# plotting the optimal number of clusters vs. gap statistic 
+tiff("Hclust_optclust.tiff", width=8, height = 8.5, units = "in", res =800)
+fviz_gap_stat(gap.stat.hc) # gives 9 optimal clusters for hierarchical clustering, further used in best hieriarchical model
+dev.off()
+
+# calculate the optimal number of clusters with the elbow method
+tiff("hclust_optclust_wss.tiff", units="in", width = 8, height = 8.5, res = 800 )
+fviz_nbclust(scaled.renamed.transpose.counts_GeTMM.filtered, FUN =hcut, method = "wss", k.max = 50)
+dev.off() # This method does not give any definite conclusion for finding the best number of optimal clusters for the hierarchical clustering method with the wss and the elbow method:hence not applicable
+
+# calculate the optimal number of clusters with average silhouette method
+fviz_nbclust(scaled.renamed.transpose.counts_GeTMM.filtered, FUN=hcut, method="silhouette")# gives lower number of clusters hence aborted 
+
+# distance matrix calculation with euclidean distances
+distclust <- dist(scaled.renamed.transpose.counts_GeTMM.filtered, method = "euclidean")
+
+# hierarchical clustering with Ward's minimum variance 
+h.clust <- hclust(distclust, method = "ward.D2")
+tiff("fullhclust.tiff", units="in", width = 20, height = 8.5, res = 800)
+plot(h.clust, xlab='', cex=0.75)
+dev.off()
+
+# cut the dendrogram, retaining only the optimum number of clusters i.e. 9
+hclust.cut.grp <- cutree(h.clust, k=9)
+# the number of observations per cluster
+table(hclust.cut.grp)
+
+# appending the cluster labels to the original dataset
+
+finaldata.hclust.cut <- cbind(scaled.renamed.transpose.counts_GeTMM.filtered, cluster = hclust.cut.grp)
+
+# cluster dendrogram with the 9 optimal clusters based on gapstatistic method
+tiff("fullhclust_opt.tiff", units="in", width = 20, height = 8.5, res = 800)
+plot(h.clust, cex=0.5, xlab='')
+rect.hclust(h.clust, k=9, border = 2:9)
+dev.off()
+
+
+# not useful gives the ticks of big size
+#tiff("fullhclust_opt.tiff", units="in", width = 20, height = 8.5, res = 800)
+#dend.obj <- as.dendrogram(h.clust, hang = -1, check = TRUE,cex=0.5)
+#col.dend.obj <- color_branches(dend.obj, h=3, k=9) 
+#plot(col.dend.obj, cex=0.5, xlab='')
+#rect.hclust(h.clust, k=9, border = "black")
+#dev.off() # not useful
+
+# the scatter plot visualization of the hierarchical clustering dendrogram
+tiff("scatterplot_hclust.tiff", units = "in", width = 20.0, height = 8.5, res=800)
+fviz_cluster(list(data = scaled.renamed.transpose.counts_GeTMM.filtered, cluster=hclust.cut.grp),repel = TRUE) 
+dev.off()
+
+```
+The ward method produces the maximum agglomerative coefficient
+```{r}
+# Genes Filtering for Random Forest
+library(genefilter)
+# Filter the genes to retain only the important ones and keep even the downregulated genes for further analysis 
+# filtering oout of < 5.0 expression in atleast 20% of the samples
+ff1 <- filterfun(pOverA(p=0.20,A=5.0))
+# scaling of data is not applied to the random forest
+gf1 <- genefilter(renamed.transpose.counts_GeTMM.filtered,ff1) 
+red.gset <- log2(renamed.transpose.counts_GeTMM.filtered[gf1,])
+```
+
+```{r}
+#Random Forest: supervised learning as uses labelled data 
+library(randomForest)
+library(rsample)
+set.seed(12)
+
+# fill in the median values of samples for each gene ( predictor) where there are -Inf
+for (i in 1:ncol(red.gset)) {
+  red.gset[,i][red.gset[,i]== "-Inf"] <- median(red.gset[,i], na.rm = TRUE)
+}
+red.gset.skintype <- cbind(red.gset, as.data.frame(skintype))
+write.csv(red.gset.skintype, "red_gset_skintype.csv")
+
+set.seed(20)
+# splitting the data into training and test 
+rf.sample <- initial_split(red.gset.skintype, prop=0.75)
+rf.train <- training(rf.sample)
+rf.test <- testing(rf.sample)
+
+set.seed(23)
+# random forest with bagging
+n.pred.rf <- ncol(red.gset.skintype) -1
+# random forest on training set
+rf <- randomForest(y=as.factor(rf.train$skintype), x=rf.train[,-18993], importance= TRUE, mtry= n.pred.rf, ntree =1000)
+rf
+tiff("rf.tiff", res = 800, units = "in", width = 20.0, height = 8.5)
+plot(rf)
+dev.off()
+# predict the rf model in the test data
+yhat.rf <- predict(rf, rf.test, type = 'response')
+
+tiff("rfmodel_predicted.tiff", units="in", width=6, height= 10, res=800)
+par(mfrow=c(2,1))
+plot(rf$predicted)
+plot(yhat.rf)
+dev.off()
+
+#mean((yhat.rf - y.test)^2): cannot predict the accuracy for the classification based method
+
+set.seed(30)
+# random forest on full model 
+rf.full <- randomForest(y=as.factor(red.gset.skintype$skintype), x=red.gset.skintype[,-18993],importance= TRUE, mtry=n.pred.rf, ntree =1000) # with 1000 trees an OOB error rate of 0.56%
+rf.full
+tiff("rffull.tiff", res = 800, units = "in", width = 20.0, height = 8.5)
+plot(rf.full)
+dev.off()
+# predict the rf full model on test data:
+yhat.full.rf <-  predict(rf.full, rf.test, type="response")
+tiff("rffullmodel_predicted.tiff", units="in", width=6, height= 10, res=800)
+par(mfrow=c(2,1))
+plot(rf.full$predicted)
+plot(yhat.full.rf)
+dev.off()
+
+# estimate the important predictors from the training data model 
+imp <- as.data.frame(importance(rf))
+impsort  <- sort(imp[,1], decreasing = TRUE)
+# filter the genes which are important 
+filtg.rf <- subset(imp, imp$`lesional psoriatic skin` > 0.0)
+
+filtg.rf.list <- as.data.frame(rownames(filtg.rf))
+#plot the importance
+tiff("importance_randomforest.tiff", units ="in", width= 20, height = 8.5, res= 800)
+plot(impsort)
+dev.off()
+
+# based on importance of the genes on full data random forest model 
+imp.full <- as.data.frame(importance(rf.full))
+impsort.full <- sort(imp.full[,1], decreasing= TRUE)
+# filter out the genes which are important 
+filtg.rf.full <-subset(imp.full, imp.full$`lesional psoriatic skin` > 0.0)
+filtg.rf.full.list <- as.data.frame(rownames(filtg.rf.full))
+
+tiff("importance_randomforestfull.tiff", units= "in", width =20, height = 8.5, res =800)
+plot(impsort.full)
+dev.off()
+
+tiff("variable_importance.tiff", units ="in", width= 20, height = 8.5, res= 800)
+varImpPlot(rf, cex= 0.75)
+dev.off()
+
+tiff("variable_importancefull.tiff", units ="in", width= 20, height = 8.5, res= 800)
+varImpPlot(rf.full, cex = 0.75)
+dev.off()
+
+# find the common genes between the model run on full data and that run on training data 
+genes.intersect.rf <- list(intersect(filtg.rf.list[[1]], filtg.rf.full.list[[1]]))
+# 157 genes are common after running the full data and training data random forest
+genes.intersect.rf <- unlist(genes.intersect.rf)
+```
+
+```{r}
+# get the random forest parameters for the genes which intersect between random forest on trained data and random forest between full data
+rf.final.param <- filtg.rf[row.names(filtg.rf) %in% genes.intersect.rf, ]
+
+# sort the random forest parameters data frame based on mean decrease accuracy:
+sort.rf.final.param <- rf.final.param[order(-rf.final.param$MeanDecreaseAccuracy),]
+
+#t.test(rf.final.param$`lesional psoriatic skin`, rf.final.param$`normal skin`,paired = TRUE): NOT Applicable as set by random forest
+
+rf.final.genes <- red.gset.skintype[, (names(red.gset.skintype) %in% genes.intersect.rf)]
+
+rf.final.genes.st <-cbind(rf.final.genes, skintype) 
+
+# divide the dataframe acc to the skintype
+pso.rf.final.genes <- rf.final.genes.st[rf.final.genes.st$skintype == "lesional psoriatic skin", ]
+nor.rf.final.genes <- rf.final.genes.st[!rf.final.genes.st$skintype== "lesional psoriatic skin", ]
+
+library(reshape2)
+pso.rf.final.genes <- pso.rf.final.genes[,-158]
+melt.pso <- melt(pso.rf.final.genes)
+melt.pso$samples <- rep(row.names(pso.rf.final.genes),length(pso.rf.final.genes))
+
+nor.rf.final.genes <- nor.rf.final.genes[,-158]
+melt.nor <- melt(nor.rf.final.genes)
+melt.nor$samples <- rep(row.names(nor.rf.final.genes), length(nor.rf.final.genes))
+
+melt.rf.final.genes <-melt(rf.final.genes)
+melt.rf.final.genes$samples <- rep(row.names(rf.final.genes), length(rf.final.genes))
+#melt.rf.final.genes <- melt.rf.final.genes[order(melt.rf.final.genes$samples), ]
+#melt.rf.final.genes$variable <- with(melt.rf.final.genes, factor(variable,levels = (sort(unique(variable)))))
+#levels(melt.rf.final.genes$samples) <- sort(levels(as.factor(melt.rf.final.genes$samples))) 
+
+#melt.rf.final.genes$samples <- as.factor(melt.rf.final.genes$samples)
+#melt.rf.final.genes$variable <- with(melt.rf.final.genes,factor(variable,levels = rev(sort(unique(variable)))))
+
+# plot the heatmaps
+
+tiff("allskinrf.tiff", units = "in", width = 20, height = 10,res = 800)
+ggplot(melt.rf.final.genes, aes(samples, variable)) +
+  geom_tile(aes(fill = value), colour = "white") +
+  scale_fill_gradient(low = "green", high = "red") + 
+     theme(axis.text.x = element_text(angle = 90, size = 8), axis.text.y = element_text(size=6))+
+  labs(y= "GENES", x="SAMPLES") + theme(legend.position = "none") 
+dev.off()
+
+tiff("lesionalskinrf.tiff", units = "in", width = 20, height = 8, res = 800)
+ggplot(melt.pso, aes(samples, variable)) +
+  geom_tile(aes(fill = value), colour = "white") +
+  scale_fill_gradient(low = "green", high = "red") + 
+     theme(axis.text.x = element_text(angle = 90, size = 8), axis.text.y = element_text(size=6))+
+  labs(x= "lesional psoriatic skin samples", y="GENES")
+dev.off()
+
+
+tiff("normalskinrf.tiff", units = "in", width = 20, height = 8, res = 800)
+ggplot(melt.nor, aes(samples, variable)) +
+  geom_tile(aes(fill = value), colour = "white") +
+  scale_fill_gradient(low = "green", high = "red") + 
+     theme(axis.text.x = element_text(angle = 90, size = 8), axis.text.y = element_text(size=6, ))+
+  labs(x= "normal skin samples", y="GENES")
+dev.off()
+
+```
+
+```{r}
+# adapted from: https://finnstats.com/index.php/2021/05/03/random-forest/
+# feature selection from the random forest predictions
+library(Boruta)
+set.seed(111)
+boruta <- Boruta( as.factor(skintype) ~ ., data = rf.final.genes.st, doTrace = 2, maxRuns = 500)
+print(boruta)
+
+tiff("Boruta.tiff", res = 800, units= "in", width = 20, height = 10)
+#par(mgp=c(2,1,0),mar=c(4,3,3,1)+0.1, mai=c(0.1,0.1,0.2,0.1))
+plot(boruta, las=2, cex.axis = 0.5, xlab= NULL)
+dev.off()
+
+plotImpHistory(boruta)
+
+bor <- TentativeRoughFix(boruta)
+print(bor)
+tiff("Boruta_tentativefix.tiff", res= 800, width= 20, height = 10, units= "in")
+plot(bor,las=2, cex.axis = 0.5, xlab= NULL )
+dev.off()
+imp.boruta <- as.data.frame(attStats(boruta))
+boruta.genes <- row.names(imp.boruta)[imp.boruta$decision=="Confirmed"]
+writeLines(boruta.genes,"boruta_genes.txt")
+
+imp.bor <- as.data.frame(attStats(bor))
+bor.genes <- row.names(imp.bor) [imp.bor$decision=="Confirmed"]
+writeLines(bor.genes,"tetantativefix_boruta_genes.txt")
+
+sel.genes.boruta <- getNonRejectedFormula(boruta)
+# random forest based on genes selected from boruta algorithm 
+
+rfboruta <- randomForest(sel.genes.boruta, data =rf.train, importance= TRUE, mtry= length(boruta.genes)-1) # as.factor(skintype) ~ boruta.genes used: y
+rfboruta$votes
+
+sel.genes.bor <- getNonRejectedFormula(bor)
+rfbor <- randomForest(sel.genes.bor, data= rf.train, importance = TRUE, mtry = length(bor.genes) -1)  # as.factor(skintype) ~ bor.genes used: y
+#rfbor$votes
+
+
+# heatmap for genes obtained from boruta algorithm
+# filter the gene expression set based on the genes obtained from the boruta
+bor.rf.final.genes <- rf.final.genes[, (colnames(rf.final.genes) %in% bor.genes)]
+library(reshape2)
+bor.melt.rf.final.genes <- melt(bor.rf.final.genes)
+bor.melt.rf.final.genes$samples <-  rep(row.names(bor.rf.final.genes),length(bor.rf.final.genes))
+
+tiff("allskin_bor_rf.tiff", units = "in", width = 20, height = 10,res = 800)
+ggplot(bor.melt.rf.final.genes, aes(samples, variable)) +
+  geom_tile(aes(fill = value), colour = "white") +
+  scale_fill_gradient(low = "green", high = "red") + 
+     theme(axis.text.x = element_text(angle = 90, size = 8), axis.text.y = element_text(size=6))+
+  labs(y= "GENES", x="SAMPLES") + theme(legend.position = "none") 
+dev.off()
+
+```
+
+T-tests for feature selection
+```{r}
+library(MASS)
+library(tidyverse)
+library(caret)
+library(tidymodels)
+library(e1071)
+
+# genes to be kept from the random forest output
+st <- factor(rf.final.genes.st$skintype)
+# get the T test for the genes which are significant between pairs of samples comparison
+genes.ttest.regmodels <- rowttests(as.matrix(t(rf.final.genes)),st)
+
+
+ttest.raw <- genes.ttest.regmodels$p.value
+# correction of p values using Benjamini and bonferroni methods
+ttest.bh <-p.adjust(genes.ttest.regmodels$p.value, "BH", n= length(genes.ttest.regmodels$p.value))
+ttest.bf <- p.adjust(genes.ttest.regmodels$p.value, "bonferroni", n = length(genes.ttest.regmodels$p.value))
+res.pvals <- cbind(ttest.raw, ttest.bf, ttest.bh)
+# plot the three p.values from the BH, bonferroni and the raw t.test
+pvals.melt <- melt(res.pvals)
+#tiff("ttestpvals.tiff", res = 800, height = 8, width= 20)
+#ggplot() + geom_line(data = pvals.melt, aes(x = Var1 , y = value, color = Var2, group = Var2), size = 1)
+#dev.off()
+# it will be good to consider the BH method and not the bonferroni that works based on family wise error rate 
+# therefore it is better to use the normal p-val filtering based on certain cutoff of the alpha  level
+
+keepers <- which(genes.ttest.regmodels$p.value<0.05) # kept 157 genes 
+```
+
+LDA analysis
+```{r}
+Regmodels.filt <- rf.final.genes[,keepers]
+Regmodels.filt  <- cbind(Regmodels.filt, st)
+
+# splitting of data into test and training
+Regmodels.sample <- initial_split(Regmodels.filt, prop = 0.75)
+Regmodels.train <- training(Regmodels.sample)
+Regmodels.test <- testing(Regmodels.sample)
+
+# modified adaptation from: https://www.geeksforgeeks.org/linear-discriminant-analysis-in-r-programming/
+
+# preprocessing of the parameters: to avoid multicollinearity affect by scaling and centering 
+preproc.parameter <- Regmodels.train %>% preProcess(method = c("center", "scale"))
+# Transform the data using the estimated parameters
+train.transform <- preproc.parameter %>% predict(Regmodels.train)
+test.transform <- preproc.parameter %>% predict(Regmodels.test)
+
+# Fit the linear discriminant analysis model
+model.lda <- lda(st~., data = train.transform) # warning that the varaibles are collinear so maybe not the best method
+plot(model.lda)
+
+# Make predictions
+predictions.lda <- predict(model.lda, test.transform, type= "response")
+predictions.lda$class
+  
+# Model accuracy
+mean(predictions.lda$class==test.transform$st)
+
+tiff("LDApredict.tiff", units = "in", res = 800, height =6, width = 6)
+plot(predictions.lda$x[,1], ylab=c("LDA Axis (Scores of test cases)"), xlab= c("SAMPLES"))  
+text(predictions.lda$x[,1], col=c(as.numeric(test.transform$st)+10))
+legend("bottomright", legend = c("normal", "psoriatic"),
+       lwd = 3, col = c("blue", "green"))# green is psoriatic and blue is normal skin
+dev.off()
+
+# confusion matrix 
+table(predictions.lda$class, test.transform$st)
+
+library(ROCR)
+lda.pred <- prediction(predictions.lda$posterior[,2], test.transform$st) 
+lda.perf <- performance(lda.pred, "tpr", "fpr")
+tiff("lda_roc.tiff", res = 800, units = "in", width = 6, height = 6)
+plot(lda.perf, colorize= TRUE)
+abline(0,1, col="red", lty=2)
+dev.off()
+
+```
+
+LASSO REGRESSION: to elude the effects of multi-collinearity and do variable selection
+```{r}
+library(glmnet)
+# converting the dataframe into a matrix with 
+x.fulldata <- model.matrix(st ~ ., data = Regmodels.filt)[,-158]
+## train data 
+x.traindata <- model.matrix(st  ~ ., data= Regmodels.train)[,-158]
+y.traindata <- Regmodels.train$st
+## test data 
+x.testdata <- model.matrix(st   ~ ., data = Regmodels.test)[,-158]
+y.testdata <- Regmodels.test$st 
+
+# lasso on training data set
+mod_lasso <- glmnet(x.traindata, y.traindata, family = "binomial", alpha =1, standardize = FALSE)
+#plot the lasso model
+plot(mod_lasso, xvar = "lambda", label =TRUE)
+# find the lambda min using cross validation
+
+####################################################################
+# lasso with cross validation on the training data set to get the best lambda.min
+#1. MSE 
+bl <- data.frame(3:20, "NA")
+colnames(bl) <- c("folds", "lambda_min")
+set.seed(30)
+for (i in 3:20){
+fl <- cv.glmnet(x.traindata, y.traindata, alpha=1, standardize= FALSE, family= "binomial", nfolds = i, type.measure = "mse")
+bl$lambda_min[i-2]<- fl$lambda.min
+print(fl$lambda.min)}
+# min lambda
+min(bl$lambda_min)
+# fold with min lambda 
+f1 <- bl[bl$lambda_min == min(bl$lambda_min),]
+f1 
+
+
+tiff("bestlambda_MSE.tiff", res = 800, height = 6, width = 6, units = "in")
+plot(bl, type= "l", ylab= "lambda_min (MSE)")
+axis(1, xaxp = c(3, 20, 17))
+dev.off()
+
+#. Binomial deviance
+bl.bd <- data.frame(3:20, "NA")
+colnames(bl.bd) <- c("folds", "lambda_min")
+set.seed(30)
+for (i in 3:20){
+fl.bd <- cv.glmnet(x.traindata, y.traindata, alpha=1, standardize= FALSE, family= "binomial", nfolds = i)
+bl.bd$lambda_min[i-2]<- fl.bd$lambda.min
+print(fl.bd$lambda.min)}
+# min lambda 
+ min(bl.bd$lambda_min)
+# fold with min lambda 
+f2 <- bl.bd[bl.bd$lambda_min == min(bl$lambda_min),]
+f2
+
+tiff("bestlambda_bd.tiff", res = 800, height = 6, width = 6, units= "in")
+plot(bl.bd, type= "l", ylab="lamda_min (Binomial deviance)" )
+axis(1, xaxp = c(3, 20, 17))
+dev.off()
+
+###########################################################################
+
+
+## best nfolds = 11 for cross validation, and not from 6 or 4 folds as the min lambda is minimum with nfold= 11 value is stable with multiple runs 
+fit_lasso <- cv.glmnet(x.traindata, y.traindata, alpha=1, standardize= FALSE, family= "binomial", nfolds = 11, type.measure = "mse")
+
+tiff("lasso_lambda.tiff", res= 800, units= "in", width= 6, height= 8)
+plot(fit_lasso)
+dev.off()
+
+print(fit_lasso)
+
+# best lambda 
+best_lambda <- fit_lasso$lambda.min
+best_lambda
+
+# get all the coefficients of the cross validated model
+coef(fit_lasso, s=best_lambda)
+
+# get the non zero coefficients based on the model with best lambda
+coef_lasso <- predict(fit_lasso, s = best_lambda, type = "coefficients")[1:ncol(x.traindata),]
+print(coef_lasso[coef_lasso != 0])
+
+# predict the test data with the lasso model 
+pred_lasso <- predict(fit_lasso, x.testdata, type="class", s= best_lambda)
+
+# confusion matrix
+confusion.glmnet(fit_lasso, newx = x.testdata, newy = y.testdata)
+
+# best model based on best_lambda fit on the training dataset
+set.seed(20)
+best.mod_lasso <- glmnet(x.traindata, y.traindata, alpha= 1, lambda = best_lambda, family = "binomial", standardize = FALSE)
+# coefficients of the best lasso model with the best min lambda
+coef(best.mod_lasso)
+
+# get the coefficients of the predictors using best lambda for the best model lasso
+best.mod_lasso.coeff <- predict(best.mod_lasso, type = "coefficients", s=best_lambda)[1:ncol(x.traindata),]
+print(best.mod_lasso.coeff[best.mod_lasso.coeff !=0])
+
+# display the non zero coefficients, the rest non important coefficients get shrunk to 0 by the lasso
+best.mod_lasso.coeff <- as.data.frame(as.matrix(best.mod_lasso.coeff))
+
+# GET THE FINAL GENES FROM THE LASSO MODEL WHICH ARE NON ZERO AND ARE RESPONSIBLE FOR THE DISEASE
+Lasso.geneslist<- row.names(best.mod_lasso.coeff)[best.mod_lasso.coeff != 0.00 ]
+Lasso.geneslist <- Lasso.geneslist[2:4]
+writeLines(Lasso.geneslist, "Lasso_genes.txt")
+
+# plot ROCR curve
+library("ROCR")
+pred2.lasso <- predict(best.mod_lasso,x.testdata, type="response", s= best_lambda)
+tiff("TPR_FPRlasso.tiff", units= "in", width = 6, height = 6, res = 800)
+plot(performance(prediction(pred2.lasso, y.testdata), 'tpr', 'fpr'))
+abline(0,1, col="red", lty=2)
+dev.off()
+
+# compute Area Under the Curve (AUC)
+auc.tmp <- performance(prediction(pred2.lasso, y.testdata),"auc")
+auc.lasso <- as.numeric(auc.tmp@y.values)
+auc.lasso
+```
+
+Comparison of the accuracy of the different models using the cross validation on the complete set of  the data
+
+```{r}
+# run the algorithm with 15 fold cross validation on complete data without arbitrary 75%:25% training and testing split and repeat it 10 times
+set.seed(23)
+
+control.cv <- trainControl(method="repeatedcv", number=15, repeats = 10) # gives best
+
+fit.lda <- train(st ~., data= Regmodels.filt, method="lda", metric= "Accuracy", trControl=control.cv)
+fit.rf <- train(st~., data= Regmodels.filt, method="rf", metric= "Accuracy", trControl=control.cv)
+mod_lasso <- train(st ~., data= Regmodels.filt, method="glmnet", family = "binomial", tuneGrid = expand.grid(alpha = 1, lambda = seq(0,1,by=0.05)), metric = "Accuracy", trControl = control.cv)
+results.cv <- resamples(list(LDA=fit.lda, RF=fit.rf, LASSO = mod_lasso))
+summary(results.cv)
+tiff("modelscomparison.tiff", units= "in", res= 800, height = 8, width = 8)
+ggplot(results.cv) + labs(y = "Accuracy") + theme(axis.text =  element_text(size= 11))
+dev.off()
+# Random forest performs better than the LDA as its accuracy is higher.
+# However random forest and lasso regression  both have the same accuracy.
+```
+```{r}
+# Rscudo
+# work with the dataframe with genes selected from Boruta
+library("rScudo")
+library("igraph")
+
+bor.rf.final.genes <- cbind(bor.rf.final.genes,st)
+
+intrain <- createDataPartition(st, list= FALSE, p = 0.75)
+test.bor <- bor.rf.final.genes[ -intrain, ]
+train.bor <- bor.rf.final.genes[ intrain,]
+
+# analyze training set
+#BiocManager::install("rScudo")
+trainRes <- scudoTrain(t(train.bor[,-80]), groups = as.factor(train.bor$st), nTop = 25, nBottom = 25, alpha = 0.05)
+trainRes
+# inspect signatures
+upSignatures(trainRes)[1:5,1:5]
+consensusUpSignatures(trainRes)[1:5, ]
+# generate and plot map of training samples
+trainNet <- scudoNetwork(trainRes, N = 0.2)
+scudoPlot(trainNet, vertex.label = NA)
+
+# perform validation using testing samples
+testRes <- scudoTest(trainRes, t(test.bor[,-80]), test.bor$st, nTop = 25, nBottom = 25)
+testNet <- scudoNetwork(testRes, N = 0.2)
+scudoPlot(testNet, vertex.label = NA)
+
+# identify clusters on map
+testClust <- igraph::cluster_spinglass(testNet, spins = 2)
+plot(testClust, testNet, vertex.label = NA)
+# As the clusters of psoriatic and normal skin are not connected so the cluster connections formation does not occur
+
+
+# Cross validation
+# use caret to test a grid a values for nTop & nBottom using cross validation
+model.scudo <- scudoModel(nTop = (2:6)*5, nBottom = (2:6)*5, N = 0.50)
+control.scudo <- caret::trainControl(method = "cv", number = 5, summaryFunction = caret::multiClassSummary)
+cvRes <- caret::train(x = train.bor[, -80], y = train.bor$st, method = model.scudo, trControl = control.scudo)
+# plot map of testing samples using best nTop & nBottom values
+testRes.cv <- scudoTest(trainRes, t(test.bor[,-80]), test.bor$st, cvRes$bestTune$nTop, cvRes$bestTune$nBottom)
+testNet.cv <- scudoNetwork(testRes.cv, N = 0.2)
+tiff("scudoplotcv.tiff", res = 800, width = 6, height = 6, units= "in")
+scudoPlot(testNet.cv, vertex.label = NA)
+dev.off()
+
+# perform classification of testing samples using best nTop & nBottom values
+classRes.cv <- scudoClassify(t(train.bor[,-80]), t(test.bor[, -80]), 
+N= 0.45, cvRes$bestTune$nTop, cvRes$bestTune$nBottom, trainGroups = as.factor(train.bor$st), alpha = 0.05)
+caret::confusionMatrix(classRes$predicted, test.bor$st)
+
+# explore predictions 
+classRes.cv$predicted
+classRes.cv$scores
+```
+For cytoscape genes names extraction from Ensemble IDs
+```{r}
+# get the genes ID from the ensemble ID
+library(biomaRt)
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+
+# genes obtained from LASSO 
+Lasso.geneslist.df<- as.data.frame(Lasso.geneslist)
+Lasso.geneslist.df <- sub("\\..*", "", Lasso.geneslist.df$Lasso.geneslist)
+Lasso.geneslist.df<- as.data.frame(Lasso.geneslist.df)
+
+Lasso.geneslist.gprofiler <- sub("\\..*", "", Lasso.geneslist.df$Lasso.geneslist)
+writeLines(Lasso.geneslist.gprofiler, "Lasso_geneslist_gprofiler.txt")
+
+Lassogenes.IDs <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                 filters = "ensembl_gene_id", values = Lasso.geneslist.df[,1],
+                 mart = mart)
+head(Lassogenes.IDs)
+
+hgnc.lasso <- Lassogenes.IDs$hgnc_symbol
+writeLines(hgnc.lasso, "hgnc_lasso.txt")
+
+# genes obtained from Boruta and random forest 
+boruta.genes.df <-  as.data.frame(boruta.genes)
+boruta.genes.df <- sub("\\..*", "", boruta.genes.df$boruta.genes)
+boruta.genes.df <- as.data.frame(boruta.genes.df)
+
+boruta.genes.gprofiler <- sub("\\..*", "", boruta.genes.df$boruta.genes)
+writeLines(boruta.genes.gprofiler, "boruta_genes_gprofiler.txt")
+
+boruta.genes.IDs <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                 filters = "ensembl_gene_id", values = boruta.genes.df[,1],
+                 mart = mart)
+
+hgnc.boruta <- boruta.genes.IDs$hgnc_symbol
+writeLines(hgnc.boruta, "hgnc_boruta.txt")
+
+# genes obtained from Boruta tentative fix and random forest 
+bor.genes.df <-  as.data.frame(bor.genes)
+bor.genes.df <- sub("\\..*", "", bor.genes.df$bor.genes)
+bor.genes.df <- as.data.frame(bor.genes.df)
+
+bor.genes.gprofiler <- sub("\\..*", "", bor.genes.df$bor.genes)
+writeLines(bor.genes.gprofiler, "bor_genes_gprofiler.txt")
+
+bor.genes.IDs <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                 filters = "ensembl_gene_id", values = bor.genes.df[,1],
+                 mart = mart)
+
+hgnc.bor <- bor.genes.IDs$hgnc_symbol
+writeLines(hgnc.bor, "hgnc_bor.txt")
+
+```
+Gprofiler
+
+
